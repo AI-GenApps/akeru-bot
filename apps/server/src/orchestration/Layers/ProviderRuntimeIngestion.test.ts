@@ -3313,6 +3313,54 @@ describe("ProviderRuntimeIngestion", () => {
     expect(activityPayload?.message).toBe("runtime activity exploded");
   });
 
+  it("includes the provider error in the fallback assistant message", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-runtime-error-fallback");
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-runtime-error-fallback-started"),
+      provider: ProviderDriverKind.make("opencodeGo"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+    });
+    await waitForThread(harness.readModel, (entry) => entry.session?.activeTurnId === turnId);
+
+    const providerError =
+      "Error from provider (Console Go): Request is missing x-opencode-session and cannot be routed efficiently.";
+    harness.emit({
+      type: "runtime.error",
+      eventId: asEventId("evt-runtime-error-fallback-error"),
+      provider: ProviderDriverKind.make("opencodeGo"),
+      createdAt: "2026-01-01T00:00:01.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: { message: providerError },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-runtime-error-fallback-completed"),
+      provider: ProviderDriverKind.make("opencodeGo"),
+      createdAt: "2026-01-01T00:00:02.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: { state: "failed" },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.turnId === turnId && message.text.includes(providerError),
+      ),
+    );
+    const fallback = thread.messages.find(
+      (message: ProviderRuntimeTestMessage) => message.turnId === turnId,
+    );
+    expect(fallback?.text).toContain("Error details:");
+    expect(fallback?.text).toContain(providerError);
+  });
+
   it("keeps the session running when a runtime.warning arrives during an active turn", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

@@ -117,6 +117,8 @@ const BUFFERED_PROPOSED_PLAN_BY_ID_CACHE_CAPACITY = 10_000;
 const BUFFERED_PROPOSED_PLAN_BY_ID_TTL = Duration.minutes(120);
 const TASK_DESCRIPTION_BY_TASK_CACHE_CAPACITY = 10_000;
 const TASK_DESCRIPTION_BY_TASK_TTL = Duration.minutes(120);
+const RUNTIME_ERROR_BY_TURN_CACHE_CAPACITY = 10_000;
+const RUNTIME_ERROR_BY_TURN_TTL = Duration.minutes(120);
 const MAX_BUFFERED_ASSISTANT_CHARS = 24_000;
 const STRICT_PROVIDER_LIFECYCLE_GUARD = process.env.T3CODE_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
 const decodeProductFeedbackToolDraft = Schema.decodeUnknownExit(ProductFeedbackToolDraft, {
@@ -1056,6 +1058,16 @@ const make = Effect.gen(function* () {
     lookup: () => Effect.succeed(""),
   });
 
+  // A provider can emit runtime.error immediately before turn.completed. Keep
+  // that detail long enough for the terminal fallback message to include it;
+  // otherwise users only see the generic "try again" text after the turn is
+  // projected.
+  const runtimeErrorByTurnKey = yield* Cache.make<string, string>({
+    capacity: RUNTIME_ERROR_BY_TURN_CACHE_CAPACITY,
+    timeToLive: RUNTIME_ERROR_BY_TURN_TTL,
+    lookup: () => Effect.succeed(""),
+  });
+
   const rememberTaskDescription = (threadId: ThreadId, taskId: string, description: string) =>
     Cache.set(taskDescriptionByTaskKey, providerTaskKey(threadId, taskId), description);
 
@@ -1068,6 +1080,17 @@ const make = Effect.gen(function* () {
         Option.filter(description, (value) => value.length > 0).pipe(Option.getOrUndefined),
       ),
     );
+
+  const rememberRuntimeError = (threadId: ThreadId, turnId: TurnId, message: string) =>
+    Cache.set(runtimeErrorByTurnKey, providerTurnKey(threadId, turnId), message);
+
+  const lookupRuntimeError = (threadId: ThreadId, turnId: TurnId) =>
+    Cache.getOption(runtimeErrorByTurnKey, providerTurnKey(threadId, turnId)).pipe(
+      Effect.map((message) => Option.filter(message, (value) => value.length > 0)),
+    );
+
+  const clearRuntimeError = (threadId: ThreadId, turnId: TurnId) =>
+    Cache.invalidate(runtimeErrorByTurnKey, providerTurnKey(threadId, turnId));
 
   const resolveThreadDetail = Effect.fn("resolveThreadDetail")(function* (threadId: ThreadId) {
     return yield* projectionSnapshotQuery
@@ -1523,6 +1546,7 @@ const make = Effect.gen(function* () {
       const assistantSegmentKeys = Array.from(yield* Cache.keys(assistantSegmentStateByTurnKey));
       const proposedPlanKeys = Array.from(yield* Cache.keys(bufferedProposedPlanById));
       const taskDescriptionKeys = Array.from(yield* Cache.keys(taskDescriptionByTaskKey));
+      const runtimeErrorKeys = Array.from(yield* Cache.keys(runtimeErrorByTurnKey));
       yield* Effect.forEach(
         turnKeys,
         (key) =>
@@ -1562,6 +1586,12 @@ const make = Effect.gen(function* () {
         taskDescriptionKeys,
         (key) =>
           key.startsWith(prefix) ? Cache.invalidate(taskDescriptionByTaskKey, key) : Effect.void,
+        { concurrency: 1 },
+      ).pipe(Effect.asVoid);
+      yield* Effect.forEach(
+        runtimeErrorKeys,
+        (key) =>
+          key.startsWith(prefix) ? Cache.invalidate(runtimeErrorByTurnKey, key) : Effect.void,
         { concurrency: 1 },
       ).pipe(Effect.asVoid);
     });
@@ -1749,6 +1779,9 @@ const make = Effect.gen(function* () {
         Option.isSome(pendingTurnStart) && thread.session?.status === "starting";
 
       const missingTurnForActiveTurn = activeTurnId !== null && eventTurnId === undefined;
+      const runtimeErrorForTurn = eventTurnId
+        ? yield* lookupRuntimeError(thread.id, eventTurnId)
+        : Option.none<string>();
 
       // A turn.started that conflicts with the active turn is legitimate when
       // the server itself has a turn start pending for this thread AND the
@@ -1844,7 +1877,11 @@ const make = Effect.gen(function* () {
             ? (event.payload.reason ?? thread.session?.lastError ?? "Provider session error")
             : event.type === "turn.completed" &&
                 normalizeRuntimeTurnState(event.payload.state) === "failed"
-              ? (event.payload.errorMessage ?? thread.session?.lastError ?? "Turn failed")
+              ? (event.payload.errorMessage ??
+                Option.getOrElse(
+                  runtimeErrorForTurn,
+                  () => thread.session?.lastError ?? "Turn failed",
+                ))
               : status === "ready"
                 ? null
                 : (thread.session?.lastError ?? null);
@@ -2135,9 +2172,12 @@ const make = Effect.gen(function* () {
             (message) => message.role === "assistant" && sameId(message.turnId, turnId),
           );
           if (!hasVisibleAssistantReply && !finalizedReplyVisibility.some(Boolean)) {
+            const runtimeErrorDetail = Option.getOrElse(runtimeErrorForTurn, () => null);
             const fallbackText =
               event.payload.state === "failed"
-                ? "I could not complete that request. Check the error details and try again."
+                ? runtimeErrorDetail
+                  ? `I could not complete that request.\n\nError details: ${truncateDetail(runtimeErrorDetail, 2_000)}`
+                  : "I could not complete that request. Check the error details and try again."
                 : "I finished without a text response. Please try again.";
             yield* finalizeAssistantMessage({
               event,
@@ -2151,6 +2191,7 @@ const make = Effect.gen(function* () {
               fallbackText,
             });
           }
+          yield* clearRuntimeError(thread.id, turnId);
         }
       }
 
@@ -2160,6 +2201,10 @@ const make = Effect.gen(function* () {
 
       if (event.type === "runtime.error") {
         const runtimeErrorMessage = event.payload.message;
+
+        if (eventTurnId !== undefined) {
+          yield* rememberRuntimeError(thread.id, eventTurnId, runtimeErrorMessage);
+        }
 
         const shouldApplyRuntimeError = !STRICT_PROVIDER_LIFECYCLE_GUARD
           ? true

@@ -324,6 +324,25 @@ function controllerResourceId(requestContext: RequestContext): string | undefine
   return typeof value === "string" ? value : undefined;
 }
 
+/**
+ * OpenCode Go routes and caches requests by conversation. Prefer Akeru's
+ * stable thread id, falling back to the memory resource for background
+ * observation calls that do not carry a bound thread in the controller
+ * context.
+ */
+function controllerOpenCodeSessionId(requestContext: RequestContext): string | undefined {
+  const context = controllerContext(requestContext);
+  if (!context) return undefined;
+  const threadId = context.threadId;
+  if (typeof threadId === "string" && threadId.trim().length > 0) return threadId;
+  const resourceId = context.resourceId;
+  if (typeof resourceId === "string" && resourceId.trim().length > 0) return resourceId;
+  const session = context.session;
+  if (typeof session !== "object" || session === null) return undefined;
+  const id = "id" in session ? session.id : undefined;
+  return typeof id === "string" && id.trim().length > 0 ? id : undefined;
+}
+
 export class AkeruPassiveObservationalMemoryProcessor implements Processor<"observational-memory"> {
   readonly id = "observational-memory" as const;
   readonly name = "Akeru Observational Memory";
@@ -391,6 +410,7 @@ export async function createAkeruMastraMemory(
       options.getOpenCodeGoApiKey,
       undefined,
       options.getSubscriptionApiKey,
+      controllerOpenCodeSessionId(requestContext),
     );
   const memory = new Memory({
     storage,
@@ -460,6 +480,7 @@ export function resolveAkeruMastraModel(
   getOpenCodeGoApiKey?: () => Promise<string | undefined>,
   modelOptions?: AkeruMastraState["modelOptions"],
   getSubscriptionApiKey?: SubscriptionAuthService["getApiKeyCredential"],
+  sessionId?: string,
 ) {
   const trimmed = modelId.trim();
   if (trimmed.startsWith("openai/")) {
@@ -484,6 +505,7 @@ export function resolveAkeruMastraModel(
       trimmed.slice("opencode-go/".length),
       getOpenCodeGoApiKey,
       () => getSubscriptionApiKey?.("opencode-go")?.baseUrl,
+      sessionId,
     );
   }
   throw new Error(`Mastra has no subscription transport for model '${modelId}'.`);
@@ -879,6 +901,7 @@ export async function createAkeruMastraHarness(
         options.getOpenCodeGoApiKey,
         controllerModelOptions(requestContext),
         options.getSubscriptionApiKey,
+        controllerOpenCodeSessionId(requestContext),
       ),
     tools: ({ requestContext }) => resolveAkeruTools(requestContext, options),
     memory: observationalMemory.memory,

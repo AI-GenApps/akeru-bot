@@ -49,7 +49,7 @@ import {
   SshReadinessError,
 } from "./errors.ts";
 
-export const DEFAULT_REMOTE_PORT = 3773;
+export const DEFAULT_REMOTE_PORT = 3774;
 const REMOTE_PORT_SCAN_WINDOW = 200;
 const SSH_READY_TIMEOUT_MS = 20_000;
 const SSH_READY_PROBE_TIMEOUT_MS = 1_000;

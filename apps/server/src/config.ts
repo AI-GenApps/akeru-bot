@@ -17,7 +17,7 @@ import * as Schema from "effect/Schema";
 
 import { sweepStalePendingAttachments } from "./attachmentStore.ts";
 
-export const DEFAULT_PORT = 3773;
+export const DEFAULT_PORT = 3774;
 
 export const RuntimeMode = Schema.Literals(["web", "desktop"]);
 export type RuntimeMode = typeof RuntimeMode.Type;

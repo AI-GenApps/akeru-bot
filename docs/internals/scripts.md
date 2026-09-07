@@ -155,7 +155,8 @@ server, allowing the same bundle to work from localhost or a tailnet hostname.
 
 Worktrees derive a preferred port offset from their path.
 
-- Default ports: server `13773`, web `5733`
+- Production server default: `3774`
+- Development ports: server `13774`, web `5744`
 - Shifted ports: `base + offset`
 - Example: `T3CODE_DEV_INSTANCE=branch-a vp run dev:desktop`
 

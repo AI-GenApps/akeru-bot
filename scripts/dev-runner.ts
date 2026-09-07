@@ -28,8 +28,8 @@ import { loadRepoEnv } from "./lib/public-config.ts";
 
 Object.assign(process.env, loadRepoEnv());
 
-const BASE_SERVER_PORT = 13773;
-const BASE_WEB_PORT = 5733;
+const BASE_SERVER_PORT = 13774;
+const BASE_WEB_PORT = 5744;
 const MAX_HASH_OFFSET = 3000;
 const MAX_PORT = 65535;
 const DESKTOP_DEV_LOOPBACK_HOST = "127.0.0.1";
@@ -271,7 +271,7 @@ export function resolveOffset(config: {
   // restarts and distinct from its siblings. Without this every worktree starts
   // at offset 0 and scan-collides onto whatever happens to be free that minute,
   // so ports move under you between runs — which breaks any URL you already
-  // shared. The main checkout keeps the documented 5733/13773.
+  // shared. The main checkout keeps the documented 5744/13774.
   const worktreePath = config.worktreePath?.trim();
   if (worktreePath) {
     const offset = ((Hash.string(worktreePath) >>> 0) % MAX_HASH_OFFSET) + 1;

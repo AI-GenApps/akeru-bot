@@ -21,6 +21,8 @@ type AkeruOpenCodeGoFetch = (
   init?: RequestInit,
 ) => Promise<Response>;
 
+const OPEN_CODE_GO_SESSION_HEADER = "x-opencode-session";
+
 export function openCodeGoProtocol(modelId: string): OpenCodeGoProtocol {
   if (RESPONSES_MODELS.has(modelId)) return "responses";
   if (modelId.startsWith("minimax-") || modelId.startsWith("qwen")) return "anthropic";
@@ -32,6 +34,7 @@ export function buildAkeruOpenCodeGoFetch(
   getApiKey: () => Promise<string | undefined>,
   request: AkeruOpenCodeGoFetch = globalThis.fetch,
   getBaseUrl: () => string | undefined = () => undefined,
+  sessionId?: string,
 ): AkeruOpenCodeGoFetch {
   return async (input, init) => {
     const apiKey = await getApiKey();
@@ -45,6 +48,9 @@ export function buildAkeruOpenCodeGoFetch(
     headers.delete("x-api-key");
     headers.set("User-Agent", OPEN_CODE_GO_USER_AGENT);
     headers.set("x-opencode-client", "akeru-bot");
+    if (sessionId?.trim()) {
+      headers.set(OPEN_CODE_GO_SESSION_HEADER, sessionId.trim());
+    }
     if (protocol === "anthropic") {
       headers.set("x-api-key", apiKey);
     } else {
@@ -62,6 +68,7 @@ export function akeruOpenCodeGoProvider(
   modelId: string,
   getApiKey: () => Promise<string | undefined>,
   getBaseUrl?: () => string | undefined,
+  sessionId?: string,
 ): MastraModelConfig {
   const protocol = openCodeGoProtocol(modelId);
   const fetch = buildAkeruOpenCodeGoFetch(
@@ -69,6 +76,7 @@ export function akeruOpenCodeGoProvider(
     getApiKey,
     globalThis.fetch,
     getBaseUrl,
+    sessionId,
   ) as NonNullable<NonNullable<Parameters<typeof createOpenAI>[0]>["fetch"]>;
   if (protocol === "responses") {
     return createOpenAI({

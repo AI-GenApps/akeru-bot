@@ -34,8 +34,29 @@ declare global {
   }
 }
 
+const CATALOG_ENTRIES_RELATIVE_PATHS = [
+  // Source modules live below apps/server/src/provider.
+  "../../../../plugins/entries/",
+  // The production server is bundled into apps/server/dist/bin.mjs. Its
+  // import.meta.url is one directory shallower than the source module.
+  "../../../plugins/entries/",
+] as const;
+
 function loadNodeCatalogModules(): CatalogManifestModules {
-  const entriesUrl = new URL("../../../../plugins/entries/", import.meta.url);
+  const entriesUrl = CATALOG_ENTRIES_RELATIVE_PATHS.map(
+    (relativePath) => new URL(relativePath, import.meta.url),
+  ).find((candidate) => {
+    try {
+      return NodeFS.statSync(candidate).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+  if (!entriesUrl) {
+    throw new Error(
+      `Could not locate the plugin catalog entries (checked ${CATALOG_ENTRIES_RELATIVE_PATHS.join(", ")}).`,
+    );
+  }
   return Object.fromEntries(
     NodeFS.readdirSync(entriesUrl, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())

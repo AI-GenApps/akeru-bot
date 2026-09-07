@@ -48,7 +48,7 @@ Object.assign(process.env, repoEnv);
 // since the page still loads.
 const isSingleOriginDev = process.env.T3CODE_SINGLE_ORIGIN_DEV === "1";
 
-const port = Number(process.env.PORT ?? 5733);
+const port = Number(process.env.PORT ?? 5744);
 const explicitHost = process.env.HOST?.trim();
 const host = explicitHost || "localhost";
 const configuredWsUrl = isSingleOriginDev ? undefined : process.env.VITE_WS_URL?.trim();

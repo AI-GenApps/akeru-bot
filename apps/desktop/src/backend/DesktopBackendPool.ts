@@ -52,7 +52,7 @@
 // Browser validation (2026-05-17, dev:desktop with wslBackendEnabled=true,
 // wslDistro="Ubuntu"):
 //   - Two backends listening on distinct loopback ports
-//     (server.log: 13773 primary, 13774 wsl).
+//     (server.log: 13774 primary, 13775 wsl).
 //   - Per-instance log files: server-child.log + server-child-wsl_Ubuntu.log.
 //   - Distinct environment ids reported by each backend's
 //     /.well-known/t3/environment (Windows vs Linux platform).

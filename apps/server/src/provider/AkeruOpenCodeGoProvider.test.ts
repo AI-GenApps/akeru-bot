@@ -64,6 +64,24 @@ describe("AkeruOpenCodeGoProvider", () => {
     expect(request).toHaveBeenCalledOnce();
   });
 
+  it("sends the stable conversation session header required by OpenCode Go", async () => {
+    const request = vi.fn(async (_input: string | Request | URL, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("x-opencode-session")).toBe("thread-123");
+      return new Response("{}", { status: 200 });
+    });
+
+    await buildAkeruOpenCodeGoFetch(
+      "chat-completions",
+      async () => "go-key",
+      request,
+      undefined,
+      "  thread-123  ",
+    )("https://opencode.ai/zen/go/v1/chat/completions");
+
+    expect(request).toHaveBeenCalledOnce();
+  });
+
   it("fails closed when no API key is connected", async () => {
     const request = vi.fn();
     await expect(

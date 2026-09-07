@@ -19,7 +19,7 @@ const SESSION_COOKIE_NAME = "t3_session";
  * Two populations qualify, for the same reason but from different causes:
  *
  * - **Dev servers** (`devUrl` set), which run several at a time across worktrees.
- * - **Desktop**, which scans upward from 3773 for a free port and binds
+ * - **Desktop**, which scans upward from 3774 for a free port and binds
  *   127.0.0.1, so a second instance lands on a different port and the same host.
  *
  * Hosted deployments keep the stable production name: their public port can
