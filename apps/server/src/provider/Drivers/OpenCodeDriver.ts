@@ -5,10 +5,9 @@
  * bundles `snapshot` / `adapter` / `textGeneration` closures over the
  * per-instance `OpenCodeSettings`.
  *
- * Two instances with different `serverUrl`s therefore talk to independent
- * OpenCode servers; when no `serverUrl` is set, the adapter + text-generation
- * shares spin up their own scoped child processes, and those child
- * processes are released when the registry scope closes.
+ * Each native session launches `opencode acp` in the bot workspace. The
+ * legacy server URL/password fields remain decoded for settings compatibility,
+ * while the session adapter uses the locally authenticated CLI directly.
  *
  * @module provider/Drivers/OpenCodeDriver
  */
@@ -26,7 +25,7 @@ import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderDriverError } from "../Errors.ts";
-import { makeOpenCodeAdapter } from "../Layers/OpenCodeAdapter.ts";
+import { makeOpenCodeAcpAdapter } from "../Layers/OpenCodeAcpAdapter.ts";
 import {
   checkOpenCodeProviderStatus,
   makePendingOpenCodeProvider,
@@ -136,7 +135,7 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
         env: processEnv,
       });
 
-      const adapter = yield* makeOpenCodeAdapter(effectiveConfig, {
+      const adapter = yield* makeOpenCodeAcpAdapter(effectiveConfig, {
         instanceId,
         environment: processEnv,
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),

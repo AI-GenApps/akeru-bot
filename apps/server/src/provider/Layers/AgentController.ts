@@ -72,6 +72,7 @@ import { OrchestrationEngineService } from "../../orchestration/Services/Orchest
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
+import { makeAkeruMcpToolSession } from "../../mcp/AkeruMcpToolSession.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import { AKERU_TURN_USAGE_RESERVATION_TOKENS, BotUsageLedger } from "../../usage/BotUsageLedger.ts";
 import { persistAkeruPreviewSnapshot } from "../AkeruPreviewSnapshotAttachment.ts";
@@ -107,6 +108,7 @@ import { getMcpRuntimeHeaders, sameMcpServerConfigurations } from "../McpServerC
 import {
   createAkeruToolRuntime,
   isMemoryToolId,
+  type AkeruRuntimeToolId,
   type AkeruToolSession,
 } from "../AkeruToolRuntime.ts";
 import type { BotBrowser, BotBrowserAttachment, CreateBotBrowserInput } from "../botBrowser.ts";
@@ -397,7 +399,9 @@ function approvalDetail(toolName: string, action: string | null, oneUse: boolean
 }
 
 function usesMastraCode(provider: ProviderDriverKind): boolean {
-  return provider === "codex" || provider === "kimi" || provider === "opencodeGo";
+  // Codex and OpenCode are native CLI clients. Kimi and OpenCode Go remain
+  // on the Mastra path until their provider-specific runtimes are retired.
+  return provider === "kimi" || provider === "opencodeGo";
 }
 
 function disabledProviderError(
@@ -564,6 +568,90 @@ const make = (options?: AgentControllerLiveOptions) =>
         readonly reject: (cause: unknown) => void;
       }
     >();
+    const pendingMcpApprovals = new Map<
+      string,
+      {
+        readonly threadId: ThreadId;
+        readonly toolId: AkeruRuntimeToolId;
+        readonly input: unknown;
+        readonly resolve: (decision: ProviderApprovalDecision) => void;
+      }
+    >();
+
+    const requestMcpApproval = (input: {
+      readonly threadId: ThreadId;
+      readonly toolId: AkeruRuntimeToolId;
+      readonly toolCallId: string;
+      readonly toolInput: unknown;
+    }): Promise<ProviderApprovalDecision> =>
+      new Promise((resolve) => {
+        pendingMcpApprovals.set(input.toolCallId, {
+          threadId: input.threadId,
+          toolId: input.toolId,
+          input: input.toolInput,
+          resolve,
+        });
+        const resolved = resolvedByThread.get(String(input.threadId));
+        if (!resolved) {
+          pendingMcpApprovals.delete(input.toolCallId);
+          resolve("cancel");
+          return;
+        }
+        PubSub.publishUnsafe(runtimeEvents, {
+          eventId: eventId(),
+          provider: resolved.provider,
+          providerInstanceId: resolved.providerInstanceId,
+          threadId: input.threadId,
+          requestId: RuntimeRequestId.make(input.toolCallId),
+          type: "request.opened",
+          payload: {
+            requestType: "dynamic_tool_call",
+            actor: "agent",
+            target: input.toolId,
+            toolName: input.toolId,
+            detail: `Approve ${input.toolId}?`,
+            args: input.toolInput,
+            options: [
+              { decision: "decline", label: "Decline" },
+              { decision: "accept", label: "Approve" },
+            ],
+          },
+          createdAt: nowIso(),
+        });
+      });
+
+    const registerMcpToolSession = (threadId: ThreadId) => {
+      if (Option.isNone(mcpSessionRegistry) || !mcpSessionRegistry.value.registerToolSession) {
+        return Effect.void;
+      }
+      return mcpSessionRegistry.value.registerToolSession(
+        threadId,
+        makeAkeruMcpToolSession({
+          threadId: String(threadId),
+          runtime: toolRuntime,
+          requestApproval: ({ toolCallId, toolId, input }) =>
+            requestMcpApproval({
+              threadId,
+              toolId,
+              toolCallId,
+              toolInput: input,
+            }),
+        }),
+      );
+    };
+
+    const unregisterMcpToolSession = (threadId: ThreadId) =>
+      Option.isSome(mcpSessionRegistry) && mcpSessionRegistry.value.unregisterToolSession
+        ? mcpSessionRegistry.value.unregisterToolSession(threadId)
+        : Effect.void;
+
+    const cancelMcpApprovals = (threadId: ThreadId) => {
+      for (const [requestId, pending] of pendingMcpApprovals) {
+        if (pending.threadId !== threadId) continue;
+        pendingMcpApprovals.delete(requestId);
+        pending.resolve("cancel");
+      }
+    };
 
     const runMastra = <A>(operation: string, run: () => Promise<A>) =>
       Effect.tryPromise({
@@ -1835,26 +1923,6 @@ const make = (options?: AgentControllerLiveOptions) =>
                 mcpServers,
               }),
             ).pipe(Effect.onError(() => clearPreviewMcpSession(threadId)));
-      if (!usesMastraCode(resolved.provider)) {
-        return yield* legacyProviderBridge.startSession(threadId, input).pipe(
-          Effect.tap((session) =>
-            Effect.sync(() => {
-              legacyResourceIdentity.set(key, {
-                workspaceResourceKey,
-                cwd: input.cwd,
-                provider: resolved.provider,
-                providerInstanceId: resolved.providerInstanceId,
-              });
-              return session;
-            }),
-          ),
-          Effect.tapError(() =>
-            runMastra("resources.release", () =>
-              sessionResources.release(key, { destroy: true }),
-            ).pipe(Effect.ignoreCause({ log: true })),
-          ),
-        );
-      }
       const workspace = "botWorkspace" in resources ? resources.botWorkspace : undefined;
       const userComputerWorkspace =
         "workspace" in resources && access.hasUserComputer && workspaceType === "local" && input.cwd
@@ -1959,6 +2027,44 @@ const make = (options?: AgentControllerLiveOptions) =>
           : {}),
       };
       toolRuntime.registerSession(key, toolSession);
+      yield* registerMcpToolSession(threadId);
+
+      if (!usesMastraCode(resolved.provider)) {
+        const providerCwd =
+          ("botWorkspaceWorkingDirectory" in resources
+            ? resources.botWorkspaceWorkingDirectory
+            : undefined) ?? input.cwd;
+        return yield* legacyProviderBridge
+          .startSession(threadId, {
+            ...input,
+            ...(providerCwd ? { cwd: providerCwd } : {}),
+          })
+          .pipe(
+            Effect.tap((session) =>
+              Effect.sync(() => {
+                legacyResourceIdentity.set(key, {
+                  workspaceResourceKey,
+                  cwd: providerCwd,
+                  provider: resolved.provider,
+                  providerInstanceId: resolved.providerInstanceId,
+                });
+                return session;
+              }),
+            ),
+            Effect.tapError(() =>
+              Effect.all(
+                [
+                  runMastra("resources.release", () =>
+                    sessionResources.release(key, { destroy: true }),
+                  ).pipe(Effect.ignoreCause({ log: true })),
+                  unregisterMcpToolSession(threadId),
+                  Effect.sync(() => toolRuntime.unregisterSession(key)),
+                ],
+                { discard: true },
+              ),
+            ),
+          );
+      }
       const session = yield* runMastra("createSession", () =>
         bundle.controller.createSession({
           id: key,
@@ -1975,6 +2081,7 @@ const make = (options?: AgentControllerLiveOptions) =>
               runMastra("resources.release", () =>
                 sessionResources.release(key, { destroy: true }),
               ).pipe(Effect.ignoreCause({ log: true })),
+              unregisterMcpToolSession(threadId),
               Effect.sync(() => toolRuntime.unregisterSession(key)),
             ],
             { discard: true },
@@ -2167,6 +2274,7 @@ const make = (options?: AgentControllerLiveOptions) =>
       "AgentController.interruptTurn",
     )(function* (input) {
       const key = String(input.threadId);
+      cancelMcpApprovals(input.threadId);
       const active = sessions.get(key);
       if (!active) {
         if (
@@ -2187,6 +2295,36 @@ const make = (options?: AgentControllerLiveOptions) =>
     )(function* (input) {
       const key = String(input.threadId);
       const active = sessions.get(key);
+      const pendingMcp = pendingMcpApprovals.get(String(input.requestId));
+      if (pendingMcp && pendingMcp.threadId === input.threadId) {
+        pendingMcpApprovals.delete(String(input.requestId));
+        pendingMcp.resolve(input.decision);
+        const resolved = resolvedByThread.get(key);
+        if (resolved) {
+          publish({
+            eventId: eventId(),
+            provider: resolved.provider,
+            providerInstanceId: resolved.providerInstanceId,
+            threadId: input.threadId,
+            requestId: RuntimeRequestId.make(String(input.requestId)),
+            createdAt: nowIso(),
+            type: "request.resolved",
+            payload: {
+              requestType: "dynamic_tool_call",
+              decision: input.decision,
+              actor: "user",
+              target: pendingMcp.toolId,
+              outcome:
+                input.decision === "accept" ||
+                input.decision === "acceptForSession" ||
+                input.decision === "acceptAlways"
+                  ? "approved"
+                  : "denied",
+            },
+          });
+        }
+        return;
+      }
       if (!active) {
         if (
           usesMastraCode(resolvedByThread.get(key)?.provider ?? ProviderDriverKind.make("codex"))
@@ -2410,6 +2548,7 @@ const make = (options?: AgentControllerLiveOptions) =>
       destroyResources: boolean,
     ) {
       const key = String(input.threadId);
+      cancelMcpApprovals(input.threadId);
       const active = sessions.get(key);
       if (!active) {
         const legacySessions = yield* legacyProviderBridge.listSessions();
@@ -2420,6 +2559,8 @@ const make = (options?: AgentControllerLiveOptions) =>
                 yield* runMastra("resources.release", () =>
                   sessionResources.release(key, { destroy: destroyResources }),
                 ).pipe(Effect.ignoreCause({ log: true }));
+                yield* unregisterMcpToolSession(input.threadId);
+                toolRuntime.unregisterSession(key);
                 legacyResourceIdentity.delete(key);
               }),
             ),
@@ -2433,6 +2574,7 @@ const make = (options?: AgentControllerLiveOptions) =>
             sessionResources.release(key, { destroy: destroyResources }),
           ).pipe(Effect.ignoreCause({ log: true }));
           yield* clearPreviewMcpSession(input.threadId);
+          yield* unregisterMcpToolSession(input.threadId);
           toolRuntime.unregisterSession(key);
           return;
         }
@@ -2457,6 +2599,7 @@ const make = (options?: AgentControllerLiveOptions) =>
               sessionResources.release(key, { destroy: destroyResources }),
             ).pipe(Effect.ignoreCause({ log: true }));
             yield* clearPreviewMcpSession(input.threadId);
+            yield* unregisterMcpToolSession(input.threadId);
             toolRuntime.unregisterSession(key);
             sessions.delete(key);
             memoryUsageByThread.delete(key);
@@ -2486,6 +2629,11 @@ const make = (options?: AgentControllerLiveOptions) =>
 
     yield* Effect.addFinalizer(() =>
       Effect.gen(function* () {
+        for (const threadId of new Set(
+          [...pendingMcpApprovals.values()].map((pending) => pending.threadId),
+        )) {
+          cancelMcpApprovals(threadId);
+        }
         for (const [threadId, active] of sessions) {
           active.pendingTurns.length = 0;
           active.admittingTurn = null;
@@ -2498,6 +2646,7 @@ const make = (options?: AgentControllerLiveOptions) =>
             bundle.controller.deleteSession({ resourceId: threadId }),
           ).pipe(Effect.ignoreCause({ log: true }));
           yield* clearPreviewMcpSession(ThreadId.make(threadId));
+          yield* unregisterMcpToolSession(ThreadId.make(threadId));
           toolRuntime.unregisterSession(threadId);
         }
         legacyResourceIdentity.clear();

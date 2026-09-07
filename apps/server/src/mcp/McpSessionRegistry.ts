@@ -10,6 +10,7 @@ import { HttpServer } from "effect/unstable/http";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpProviderSession from "./McpProviderSession.ts";
+import type { AkeruMcpToolSession } from "./AkeruMcpToolSession.ts";
 
 export interface McpCredentialRequest {
   readonly threadId: ThreadId;
@@ -34,6 +35,19 @@ export interface McpSessionRegistryShape {
   readonly revokeProviderSession: (providerSessionId: string) => Effect.Effect<void>;
   readonly revokeThread: (threadId: ThreadId) => Effect.Effect<void>;
   readonly revokeAll: Effect.Effect<void>;
+  /**
+   * The provider session owns the actual Akeru tool runtime. The MCP HTTP
+   * route only needs a narrow bridge so it can execute the same catalog for
+   * CLI/ACP providers without importing AgentController.
+   */
+  readonly registerToolSession?: (
+    threadId: ThreadId,
+    session: AkeruMcpToolSession,
+  ) => Effect.Effect<void>;
+  readonly unregisterToolSession?: (threadId: ThreadId) => Effect.Effect<void>;
+  readonly toolSessionForThread?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<AkeruMcpToolSession | undefined>;
 }
 
 export class McpSessionRegistry extends Context.Service<
@@ -96,6 +110,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
   const environmentId = yield* environment.getEnvironmentId;
   const httpServer = yield* HttpServer.HttpServer;
   const state = yield* SynchronizedRef.make<RegistryState>({ records: new Map() });
+  const toolSessions = new Map<string, AkeruMcpToolSession>();
   const currentTimeMillis = options.now ? Effect.sync(options.now) : Clock.currentTimeMillis;
   const livenessWindowMs = options.livenessWindowMs ?? DEFAULT_LIVENESS_WINDOW_MS;
   const endpoint =
@@ -128,7 +143,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
         threadId: ThreadId.make(request.threadId),
         providerSessionId,
         providerInstanceId: ProviderInstanceId.make(request.providerInstanceId),
-        capabilities: new Set(["preview"]),
+        capabilities: new Set<McpInvocationContext.McpCapability>(["preview", "akeru-tools"]),
         issuedAt,
       };
       yield* SynchronizedRef.update(state, ({ records }) => {
@@ -199,6 +214,15 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       yield* revokeWhere((record) => record.scope.threadId === threadId);
     }),
     revokeAll: SynchronizedRef.set(state, { records: new Map() }),
+    registerToolSession: (threadId, session) =>
+      Effect.sync(() => {
+        toolSessions.set(String(threadId), session);
+      }),
+    unregisterToolSession: (threadId) =>
+      Effect.sync(() => {
+        toolSessions.delete(String(threadId));
+      }),
+    toolSessionForThread: (threadId) => Effect.sync(() => toolSessions.get(String(threadId))),
   });
 });
 

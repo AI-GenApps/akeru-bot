@@ -1,5 +1,6 @@
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -11,6 +12,10 @@ import { AiError, McpProtocol, McpSchema, McpServer, Tool } from "effect/unstabl
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
 import packageJson from "../../package.json" with { type: "json" };
+import { AKERU_TOOL_CATALOG, AkeruToolInputSchemas } from "@t3tools/contracts";
+import { AkeruMemoryToolInputSchemas } from "../memory/MemoryToolHandlers.ts";
+import { isMemoryToolId, type AkeruRuntimeToolId } from "../provider/AkeruToolRuntime.ts";
+import { toJsonSchemaObject } from "../textGeneration/TextGenerationUtils.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
@@ -208,6 +213,138 @@ const toolErrorResult = (message: string) =>
     content: [{ type: "text", text: message }],
   });
 
+const safeJsonString = (value: unknown): string => {
+  try {
+    const encoded = JSON.stringify(value);
+    return encoded === undefined ? String(value) : encoded;
+  } catch {
+    return String(value);
+  }
+};
+
+class AkeruToolExecutionError extends Data.TaggedError("AkeruToolExecutionError")<{
+  readonly detail: string;
+}> {
+  override get message(): string {
+    return this.detail;
+  }
+}
+
+const AKERU_MCP_TOOL_PREFIX = "akeru_";
+const AKERU_MEMORY_TOOL_DESCRIPTIONS = {
+  recall_memory: "Search approved memory for the current turn.",
+  remember: "Propose a durable fact for the current user and bot context.",
+  update_memory: "Propose a revision to an authorized durable fact.",
+  forget_memory: "Forget an authorized durable fact immediately.",
+} as const;
+
+function mcpToolName(toolId: AkeruRuntimeToolId): string {
+  return `${AKERU_MCP_TOOL_PREFIX}${toolId}`;
+}
+
+const akeruToolInputSchema = (toolId: AkeruRuntimeToolId) =>
+  isMemoryToolId(toolId) ? AkeruMemoryToolInputSchemas[toolId] : AkeruToolInputSchemas[toolId];
+
+const registerAkeruTools = Effect.fn("McpHttpServer.registerAkeruTools")(function* () {
+  const server = yield* McpServer.McpServer;
+  const registryOption = yield* Effect.serviceOption(McpSessionRegistry.McpSessionRegistry);
+  if (Option.isNone(registryOption) || !registryOption.value.toolSessionForThread) return;
+  const registry = registryOption.value;
+  const definitions = [
+    ...AKERU_TOOL_CATALOG.map((tool) => ({ id: tool.id, description: tool.description })),
+    ...Object.entries(AKERU_MEMORY_TOOL_DESCRIPTIONS).map(([id, description]) => ({
+      id: id as AkeruRuntimeToolId,
+      description,
+    })),
+  ];
+  let toolCallSequence = 0;
+
+  for (const definition of definitions) {
+    const toolId = definition.id;
+    yield* server.addTool({
+      tool: new McpSchema.Tool({
+        name: mcpToolName(toolId),
+        description: definition.description,
+        inputSchema: normalizeProviderToolInputSchema(
+          toJsonSchemaObject(akeruToolInputSchema(toolId)) as ToolInputSchema,
+        ),
+      }),
+      annotations: Context.empty(),
+      handle: (payload) =>
+        Effect.withFiber((fiber) => {
+          const invocation = Context.getUnsafe(
+            fiber.context,
+            McpInvocationContext.McpInvocationContext,
+          );
+          if (!invocation.capabilities.has("akeru-tools")) {
+            return Effect.succeed(
+              toolErrorResult("Akeru tools are not enabled for this provider session."),
+            );
+          }
+          return registry.toolSessionForThread!(invocation.threadId).pipe(
+            Effect.flatMap((session) => {
+              if (!session) {
+                return Effect.succeed(
+                  toolErrorResult("The Akeru tool session is no longer active."),
+                );
+              }
+              if (!session.toolsForThread().some((candidate) => candidate.id === toolId)) {
+                return Effect.succeed(
+                  toolErrorResult(`Tool '${toolId}' is not available for this session.`),
+                );
+              }
+              return Effect.gen(function* () {
+                toolCallSequence += 1;
+                const toolCallId = `mcp-${toolId}-${toolCallSequence}`;
+                return yield* Effect.tryPromise({
+                  try: async () => {
+                    const needsApproval = await session.requiresApproval(toolId, payload);
+                    if (needsApproval) {
+                      const decision = await session.requestApproval({
+                        toolCallId,
+                        toolId,
+                        input: payload,
+                      });
+                      if (
+                        decision !== "accept" &&
+                        decision !== "acceptForSession" &&
+                        decision !== "acceptAlways"
+                      ) {
+                        return toolErrorResult(`Tool '${toolId}' was not approved.`);
+                      }
+                      session.grantApproval({ toolCallId, toolId, input: payload });
+                    }
+                    const result = await session.execute({
+                      toolId,
+                      toolCallId,
+                      input: payload,
+                      approvalMode: "require-grant",
+                    });
+                    return new McpSchema.CallToolResult({
+                      isError: false,
+                      structuredContent:
+                        typeof result === "object" && result !== null ? result : undefined,
+                      content: [{ type: "text", text: safeJsonString(result) }],
+                    });
+                  },
+                  catch: (cause) =>
+                    new AkeruToolExecutionError({
+                      detail: cause instanceof Error ? cause.message : String(cause),
+                    }),
+                });
+              });
+            }),
+            Effect.catch((cause) =>
+              Effect.succeed(
+                toolErrorResult(cause instanceof Error ? cause.message : String(cause)),
+              ),
+            ),
+          );
+        }),
+    });
+  }
+});
+
 const registerPreviewStandardTools = Effect.fn("McpHttpServer.registerPreviewStandardTools")(
   function* () {
     const server = yield* McpServer.McpServer;
@@ -369,6 +506,7 @@ const PreviewSnapshotRegistrationLive = Layer.effectDiscard(registerPreviewSnaps
 export const PreviewToolkitRegistrationLive = Layer.mergeAll(
   PreviewStandardToolkitRegistrationLive,
   PreviewSnapshotRegistrationLive,
+  Layer.effectDiscard(registerAkeruTools()),
 );
 
 const McpTransportLive = McpServer.layerHttp({

@@ -27,6 +27,8 @@ export interface AkeruBrowserEndpoint {
 export interface AkeruBotWorkspace {
   readonly id: string;
   readonly provider: BotSandbox;
+  /** Local provider-process cwd. Remote sandboxes intentionally leave this unset. */
+  readonly workingDirectory?: string;
   readonly providerId?: string;
   readonly workspace: Workspace;
   readonly browserEndpoint?: (port: number) => Promise<AkeruBrowserEndpoint>;
@@ -101,7 +103,7 @@ export async function createBotWorkspace(
     sandbox: new LocalSandbox({ workingDirectory: root }),
     tools: TOOL_NAME_OVERRIDES,
   });
-  return wrap(workspace, "local");
+  return wrap(workspace, "local", root);
 }
 
 export async function createRemoteBotWorkspace(
@@ -163,10 +165,15 @@ export async function createRemoteBotWorkspace(
   };
 }
 
-function wrap(workspace: Workspace, provider: "local" | RemoteBotSandbox): AkeruBotWorkspace {
+function wrap(
+  workspace: Workspace,
+  provider: "local" | RemoteBotSandbox,
+  workingDirectory?: string,
+): AkeruBotWorkspace {
   return {
     id: workspace.id,
     provider,
+    ...(workingDirectory ? { workingDirectory } : {}),
     workspace,
     inspect: async () =>
       workspace.status === "destroyed"

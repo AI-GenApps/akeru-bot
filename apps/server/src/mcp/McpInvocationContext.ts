@@ -7,7 +7,8 @@ import {
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 
-export type McpCapability = "preview";
+/** Capabilities granted to a provider-scoped MCP credential. */
+export type McpCapability = "preview" | "akeru-tools";
 
 export interface McpInvocationScope {
   readonly environmentId: EnvironmentId;

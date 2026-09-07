@@ -46,6 +46,7 @@ export interface AkeruSessionResourceInput {
 export interface AkeruSessionResourceView {
   readonly workspace: Workspace;
   readonly botWorkspace: Workspace;
+  readonly botWorkspaceWorkingDirectory?: string;
 }
 
 export interface AkeruSessionResourcesOptions {
@@ -272,6 +273,9 @@ export class AkeruSessionResources {
         workspace:
           userComputerWorkspaceLease?.workspace.workspace ?? workspaceLease.workspace.workspace,
         botWorkspace: workspaceLease.workspace.workspace,
+        ...(workspaceLease.workspace.workingDirectory
+          ? { botWorkspaceWorkingDirectory: workspaceLease.workspace.workingDirectory }
+          : {}),
       };
     } catch (cause) {
       await this.releaseOnce(key, { destroy: true }).catch(() => undefined);
