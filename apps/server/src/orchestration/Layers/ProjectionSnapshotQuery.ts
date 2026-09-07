@@ -5,6 +5,7 @@ import {
   BotId,
   BotUsageCap,
   ChannelBinding,
+  ChannelMessageOrigin,
   ChatAttachment,
   CheckpointRef,
   GroupMembership,
@@ -117,6 +118,7 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
   Struct.assign({
     isStreaming: Schema.Number,
     attachments: Schema.NullOr(Schema.fromJsonString(Schema.Array(ChatAttachment))),
+    channelOrigin: Schema.NullOr(Schema.fromJsonString(ChannelMessageOrigin)),
     reactions: Schema.fromJsonString(Schema.Array(OrchestrationMessageReaction)),
   }),
 );
@@ -674,6 +676,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           role,
           text,
           attachments_json AS "attachments",
+          channel_origin_json AS "channelOrigin",
           reactions_json AS "reactions",
           is_streaming AS "isStreaming",
           created_at AS "createdAt",
@@ -1150,6 +1153,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           role,
           text,
           attachments_json AS "attachments",
+          channel_origin_json AS "channelOrigin",
           reactions_json AS "reactions",
           is_streaming AS "isStreaming",
           created_at AS "createdAt",
@@ -1401,6 +1405,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           role,
           text,
           attachments_json AS "attachments",
+          channel_origin_json AS "channelOrigin",
           reactions_json AS "reactions",
           is_streaming AS "isStreaming",
           created_at AS "createdAt",
@@ -1791,6 +1796,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   role: row.role,
                   text: row.text,
                   ...(row.attachments !== null ? { attachments: row.attachments } : {}),
+                  ...(row.channelOrigin !== null && row.channelOrigin !== undefined
+                    ? { channelOrigin: row.channelOrigin }
+                    : {}),
                   turnId: row.turnId,
                   respondingBotId: row.respondingBotId ?? null,
                   reactions: row.reactions,
@@ -3030,6 +3038,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             text: row.text,
             turnId: row.turnId,
             respondingBotId: row.respondingBotId ?? null,
+            ...(row.channelOrigin !== null && row.channelOrigin !== undefined
+              ? { channelOrigin: row.channelOrigin }
+              : {}),
             reactions: row.reactions,
             streaming: row.isStreaming === 1,
             createdAt: row.createdAt,

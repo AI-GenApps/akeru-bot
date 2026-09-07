@@ -16,6 +16,7 @@ import {
   BotId,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
+  DEFAULT_SERVER_SETTINGS,
   EventId,
   MessageId,
   type OrchestrationCommand,
@@ -23,6 +24,7 @@ import {
   ProviderItemId,
   RuntimeRequestId,
   type ServerSettings,
+  type ServerSettingsPatch,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -31,6 +33,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -59,6 +62,9 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { BotInboxService } from "../../bot-inbox/service.ts";
 import { BotUsageLedger, BotUsageLedgerLive } from "../../usage/BotUsageLedger.ts";
+import * as ChannelDeliveryStore from "../../channels/ChannelDeliveryStore.ts";
+import * as ChannelRuntime from "../../channels/ChannelRuntime.ts";
+import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 
 function makeTestServerSettingsLayer(overrides: Partial<ServerSettings> = {}) {
   return ServerSettingsService.layerTest(overrides);
@@ -159,6 +165,26 @@ function createAgentControllerHarness() {
   };
 }
 
+function makeMemoryServerSecretStore(): ServerSecretStore.ServerSecretStore["Service"] {
+  const values = new Map<string, Uint8Array>();
+  return {
+    get: (name) =>
+      Effect.sync(() => {
+        const value = values.get(name);
+        return value === undefined ? Option.none() : Option.some(Uint8Array.from(value));
+      }),
+    set: (name, value) => Effect.sync(() => void values.set(name, Uint8Array.from(value))),
+    create: (name, value) => Effect.sync(() => void values.set(name, Uint8Array.from(value))),
+    getOrCreateRandom: (name, bytes) =>
+      Effect.sync(() => {
+        const value = values.get(name) ?? new Uint8Array(bytes);
+        values.set(name, value);
+        return Uint8Array.from(value);
+      }),
+    remove: (name) => Effect.sync(() => void values.delete(name)),
+  };
+}
+
 type ProviderRuntimeTestReadModel = OrchestrationReadModel;
 type ProviderRuntimeTestThread = ProviderRuntimeTestReadModel["threads"][number];
 type ProviderRuntimeTestMessage = ProviderRuntimeTestThread["messages"][number];
@@ -224,10 +250,17 @@ describe("ProviderRuntimeIngestion", () => {
     threadTitle?: string;
     botOwned?: boolean;
     botUsageCap?: { readonly unit: "tokens"; readonly limit: number } | null;
+    channel?: {
+      readonly post?: (externalThreadId: string, text: string) => Promise<void>;
+    };
   }) {
     const workspaceRoot = makeTempDir("t3-provider-project-");
     NodeFS.mkdirSync(NodePath.join(workspaceRoot, ".git"));
     const provider = createAgentControllerHarness();
+    const channelSecretStore = options?.channel ? makeMemoryServerSecretStore() : undefined;
+    const channelDeliveryStore = options?.channel
+      ? ChannelDeliveryStore.makeMemoryChannelDeliveryStore()
+      : undefined;
     const orchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
       Layer.provide(OrchestrationProjectionPipelineLive),
@@ -240,7 +273,7 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provide(RepositoryIdentityResolver.layer),
       Layer.provide(SqlitePersistenceMemory),
     );
-    const layer = ProviderRuntimeIngestionLive.pipe(
+    const baseLayer = ProviderRuntimeIngestionLive.pipe(
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
       // Single shared liveness instance across ingestion (writer), the
@@ -254,6 +287,17 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), workspaceRoot)),
       Layer.provideMerge(NodeServices.layer),
     );
+    const layer =
+      channelSecretStore !== undefined && channelDeliveryStore !== undefined
+        ? baseLayer.pipe(
+            Layer.provideMerge(
+              Layer.succeed(ServerSecretStore.ServerSecretStore, channelSecretStore),
+            ),
+            Layer.provideMerge(
+              Layer.succeed(ChannelDeliveryStore.ChannelDeliveryStore, channelDeliveryStore),
+            ),
+          )
+        : baseLayer;
     runtime = ManagedRuntime.make(layer);
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
@@ -262,8 +306,40 @@ describe("ProviderRuntimeIngestion", () => {
     await Effect.runPromise(ingestion.start().pipe(Scope.provide(scope)));
     const drain = () => Effect.runPromise(ingestion.drain);
     const dispatch = (command: OrchestrationCommand) => Effect.runPromise(engine.dispatch(command));
-
     const createdAt = "2026-01-01T00:00:00.000Z";
+    let channelRandomId = 0;
+    let channelSettings = { ...DEFAULT_SERVER_SETTINGS, ...(options?.serverSettings ?? {}) };
+    const channelDependencies =
+      channelSecretStore !== undefined && channelDeliveryStore !== undefined
+        ? {
+            engine,
+            secretStore: channelSecretStore,
+            settings: {
+              getSettings: Effect.sync(() => channelSettings),
+              updateSettings: (patch: ServerSettingsPatch) =>
+                Effect.sync(() => {
+                  channelSettings = { ...channelSettings, ...patch } as ServerSettings;
+                  return channelSettings;
+                }),
+            },
+            deliveryStore: channelDeliveryStore,
+            readModel: () => Effect.runPromise(snapshotQuery.getCommandReadModel()),
+            readThread: (threadId: ThreadId) =>
+              Effect.runPromise(
+                snapshotQuery.getThreadDetailById(threadId).pipe(Effect.map(Option.getOrNull)),
+              ),
+            nowIso: async () => createdAt,
+            randomUuid: async () => `channel-${channelRandomId++}`,
+            startTransport: async () => ({
+              externalIdentity: "@akeru-test",
+              runtime: {
+                post: options?.channel?.post ?? (async () => undefined),
+                shutdown: async () => undefined,
+              },
+            }),
+          }
+        : undefined;
+
     await dispatch({
       type: "project.create",
       commandId: CommandId.make("cmd-provider-project-create"),
@@ -343,6 +419,16 @@ describe("ProviderRuntimeIngestion", () => {
       emit: provider.emit,
       setProviderSession: provider.setSession,
       drain,
+      connectChannel:
+        channelDependencies === undefined
+          ? undefined
+          : (input: Parameters<typeof ChannelRuntime.connectChannel>[1]) =>
+              ChannelRuntime.connectChannel(channelDependencies, input),
+      dispatchInboundChannelMessage:
+        channelDependencies === undefined
+          ? undefined
+          : (input: Parameters<typeof ChannelRuntime.dispatchInboundChannelMessage>[1]) =>
+              ChannelRuntime.dispatchInboundChannelMessage(channelDependencies, input),
       botInbox: new BotInboxService(
         NodePath.join(workspaceRoot, "userdata", "secrets", "bot-inbox.json"),
       ),
@@ -459,6 +545,102 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(thread.session?.status).toBe("error");
     expect(thread.session?.lastError).toBe("turn failed");
+  });
+
+  it("delivers an OpenCode ACP completion to the originating channel", async () => {
+    const posts: Array<{ readonly externalThreadId: string; readonly text: string }> = [];
+    const harness = await createHarness({
+      botOwned: true,
+      channel: {
+        post: async (externalThreadId, text) => {
+          posts.push({ externalThreadId, text });
+        },
+      },
+    });
+    const externalThreadId = "telegram-chat-opencode";
+    const threadId = ChannelRuntime.channelThreadId(
+      BotId.make("bot-akeru"),
+      "telegram",
+      externalThreadId,
+    );
+    const turnId = asTurnId("turn-opencode-channel");
+    const createdAt = "2026-01-01T00:00:00.000Z";
+
+    try {
+      if (!harness.connectChannel || !harness.dispatchInboundChannelMessage) {
+        throw new Error("Channel test harness was not configured with channel dependencies.");
+      }
+      await harness.connectChannel({
+        type: "channel.connect",
+        commandId: CommandId.make("cmd-channel-connect-opencode"),
+        botId: BotId.make("bot-akeru"),
+        provider: "telegram",
+        token: "telegram-test-token",
+      });
+      await harness.dispatchInboundChannelMessage({
+        botId: BotId.make("bot-akeru"),
+        provider: "telegram",
+        externalThreadId,
+        externalSenderId: "telegram-user",
+        text: "Reply through the channel",
+      });
+
+      harness.setProviderSession({
+        provider: ProviderDriverKind.make("opencode"),
+        status: "running",
+        runtimeMode: "approval-required",
+        threadId,
+        activeTurnId: turnId,
+        createdAt,
+        updatedAt: createdAt,
+      });
+      harness.emit({
+        type: "turn.started",
+        eventId: asEventId("evt-opencode-channel-turn-started"),
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        turnId,
+        createdAt: "2026-01-01T00:00:01.000Z",
+      });
+      await waitForThread(
+        harness.readModel,
+        (thread) => thread.session?.status === "running" && thread.session.activeTurnId === turnId,
+        2_000,
+        threadId,
+      );
+
+      // OpenCode ACP emits the assistant content before its prompt result is
+      // converted into turn.completed. The adapter's drain barrier preserves
+      // this ordering for the ingestion worker and channel reply resolver.
+      harness.emit({
+        type: "content.delta",
+        eventId: asEventId("evt-opencode-channel-content"),
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        turnId,
+        itemId: asItemId("opencode-channel-assistant"),
+        createdAt: "2026-01-01T00:00:02.000Z",
+        payload: {
+          streamKind: "assistant_text",
+          delta: "OpenCode channel reply",
+        },
+      });
+      harness.emit({
+        type: "turn.completed",
+        eventId: asEventId("evt-opencode-channel-turn-completed"),
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        turnId,
+        createdAt: "2026-01-01T00:00:03.000Z",
+        payload: { state: "completed" },
+      });
+
+      await harness.drain();
+
+      expect(posts).toEqual([{ externalThreadId, text: "OpenCode channel reply" }]);
+    } finally {
+      await ChannelRuntime.stopChannelsForBot(BotId.make("bot-akeru"));
+    }
   });
 
   it("records provider token usage and releases the remaining turn reservation", async () => {

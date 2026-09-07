@@ -68,6 +68,8 @@ export interface OpenCodeAcpAdapterLiveOptions {
   readonly environment?: NodeJS.ProcessEnv;
   readonly nativeEventLogger?: EventNdjsonLogger;
   readonly instanceId?: ProviderInstanceId;
+  /** Test seam for exercising ACP event ordering without a child process. */
+  readonly makeAcpRuntime?: typeof makeOpenCodeAcpRuntime;
 }
 
 interface PendingApproval {
@@ -314,7 +316,7 @@ export function makeOpenCodeAcpAdapter(
               : []),
           ];
           let context!: OpenCodeAcpSessionContext;
-          const acp = yield* makeOpenCodeAcpRuntime({
+          const acp = yield* (options?.makeAcpRuntime ?? makeOpenCodeAcpRuntime)({
             openCodeSettings,
             ...(options?.environment ? { environment: options.environment } : {}),
             childProcessSpawner,
@@ -676,6 +678,14 @@ export function makeOpenCodeAcpAdapter(
           ),
           Effect.tap((result) =>
             Effect.gen(function* () {
+              // ACP session/update notifications are consumed by a separate
+              // fiber. Wait until the runtime has handed all notifications
+              // already queued for this prompt to that consumer before
+              // publishing turn.completed. Channel delivery resolves its
+              // assistant message from the projected read model at that
+              // boundary; publishing completion first can therefore make a
+              // valid OpenCode reply look empty and skip delivery.
+              yield* context.acp.drainEvents;
               context.turns.push({ id: turnId, items: [{ prompt, result }] });
               context.promptsInFlight = Math.max(0, context.promptsInFlight - 1);
               if (context.promptsInFlight === 0) {
