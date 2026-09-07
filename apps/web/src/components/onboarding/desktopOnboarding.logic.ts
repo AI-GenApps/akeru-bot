@@ -104,7 +104,6 @@ const providerIds: readonly SubscriptionProviderId[] = [
   "anthropic",
   "xai",
   "kimi-for-coding",
-  "opencode-go",
 ];
 
 const useCaseIds: readonly DesktopOnboardingUseCaseId[] = [
@@ -155,7 +154,6 @@ const subscriptionDriver: Readonly<Partial<Record<SubscriptionProviderId, string
   anthropic: "claudeAgent",
   xai: "grok",
   "kimi-for-coding": "kimi",
-  "opencode-go": "opencodeGo",
 };
 
 export function resolveDesktopOnboardingEngine(

@@ -264,14 +264,6 @@ describe("onboarding API-key connections", () => {
     });
   });
 
-  it("opens the key form directly for OpenCode Go", async () => {
-    await render("opencode-go");
-    await click("Connect OpenCode Go");
-    expect(mocks.form?.supportsBaseUrl).toBe(true);
-    expect(mocks.start).not.toHaveBeenCalled();
-    expect(mocks.open).not.toHaveBeenCalled();
-  });
-
   it("preserves OAuth and enables Claude paste completion after starting", async () => {
     mocks.start.mockResolvedValue(
       success({

@@ -40,6 +40,7 @@ import { usePrimarySessionState } from "../../environments/primary";
 import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
 import { resolveAppModelSelectionState } from "../../modelSelection";
+import { isRetiredProviderDriverKind } from "../../providerInstances";
 import {
   useEnvironments,
   usePrimaryEnvironmentId,
@@ -488,6 +489,7 @@ export function EnvironmentProviderSettings({
     Array<[ProviderInstanceId, ProviderInstanceConfig]>
   >();
   for (const [rawId, instance] of Object.entries(settings.providerInstances ?? {})) {
+    if (isRetiredProviderDriverKind(instance.driver)) continue;
     const driver = instance.driver;
     const list = instancesByDriver.get(driver) ?? [];
     list.push([rawId as ProviderInstanceId, instance]);

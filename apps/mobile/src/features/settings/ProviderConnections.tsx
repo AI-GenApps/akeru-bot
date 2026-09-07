@@ -140,10 +140,6 @@ export function ProviderConnections({ environmentId }: { readonly environmentId:
   };
 
   const connect = async (provider: SubscriptionProviderId) => {
-    if (provider === "opencode-go") {
-      openKey(provider);
-      return;
-    }
     setError(null);
     setCode("");
     setBusy(true);
@@ -343,23 +339,15 @@ export function ProviderConnections({ environmentId }: { readonly environmentId:
                   ) : null}
                   <View className="flex-row flex-wrap gap-2">
                     <Action
-                      label={
-                        status?.connected
-                          ? apiKey && provider.id !== "opencode-go"
-                            ? "Use OAuth"
-                            : "Reconnect"
-                          : "Connect"
-                      }
+                      label={status?.connected ? (apiKey ? "Use OAuth" : "Reconnect") : "Connect"}
                       disabled={busy || query.isPending}
                       onPress={() => void connect(provider.id)}
                     />
-                    {provider.id !== "opencode-go" ? (
-                      <Action
-                        label={apiKey ? "Reconnect key" : "API key"}
-                        disabled={busy || query.isPending}
-                        onPress={() => openKey(provider.id)}
-                      />
-                    ) : null}
+                    <Action
+                      label={apiKey ? "Reconnect key" : "API key"}
+                      disabled={busy || query.isPending}
+                      onPress={() => openKey(provider.id)}
+                    />
                     {status?.connected ? (
                       <>
                         <Action

@@ -8,6 +8,7 @@ import {
   isProviderInstancePickerReady,
   isProviderInstancePickerSelectable,
   isProviderInstancePickerVisible,
+  isRetiredProviderDriverKind,
   resolveDefaultProviderModelSelection,
   resolveSelectableProviderInstance,
   resolveProviderDriverKindForInstanceSelection,
@@ -179,6 +180,15 @@ describe("applyProviderInstanceSettings", () => {
 });
 
 describe("deriveProviderInstanceEntries", () => {
+  it("does not surface retired OpenCode Go snapshots", () => {
+    expect(isRetiredProviderDriverKind(ProviderDriverKind.make("opencodeGo"))).toBe(true);
+    expect(
+      deriveProviderInstanceEntries([
+        provider({ provider: ProviderDriverKind.make("opencodeGo"), instanceId: "opencodeGo" }),
+      ]),
+    ).toEqual([]);
+  });
+
   it("uses explicit instance id and driver kind from the snapshot", () => {
     const snapshot = provider({
       provider: ProviderDriverKind.make("codex"),

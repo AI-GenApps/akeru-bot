@@ -233,10 +233,6 @@ export function SubscriptionStep({
   };
 
   const connect = async () => {
-    if (draft.providerId === "opencode-go" && !captureMode) {
-      openKey();
-      return;
-    }
     if (captureMode) {
       onContinue();
       return;
@@ -441,7 +437,7 @@ export function SubscriptionStep({
           {error}
         </p>
       ) : null}
-      {!connected && selected.id !== "opencode-go" ? (
+      {!connected ? (
         <Button className="w-full" variant="outline" disabled={busy} onClick={openKey}>
           Use an API key
         </Button>

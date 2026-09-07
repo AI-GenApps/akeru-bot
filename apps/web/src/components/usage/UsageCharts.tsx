@@ -18,11 +18,13 @@ import { Grid } from "../dither-kit/grid";
 import { Tooltip } from "../dither-kit/tooltip";
 import { XAxis } from "../dither-kit/x-axis";
 import { YAxis } from "../dither-kit/y-axis";
-import { ClaudeAI, CursorIcon, GrokIcon, OpenCodeIcon, type Icon, OpenAI } from "../Icons";
+import { ClaudeAI, CursorIcon, GrokIcon, type Icon, OpenAI } from "../Icons";
 import { PROVIDER_ORDER, PROVIDER_PRESENTATION, providersWithUsage } from "./usageProviders";
 
+type DashboardSubscriptionProviderId = Exclude<SubscriptionProviderId, "opencode-go">;
+
 export const PLAN_PROVIDER_PRESENTATION: Record<
-  SubscriptionProviderId,
+  DashboardSubscriptionProviderId,
   {
     readonly label: string;
     readonly icon: Icon | string;
@@ -38,16 +40,14 @@ export const PLAN_PROVIDER_PRESENTATION: Record<
     icon: "/provider-icons/kimi-for-coding.svg",
     color: "purple",
   },
-  "opencode-go": { label: "OpenCode Go", icon: OpenCodeIcon, color: "grey" },
 };
 
-export const PLAN_PROVIDER_ORDER: readonly SubscriptionProviderId[] = [
+export const PLAN_PROVIDER_ORDER: readonly DashboardSubscriptionProviderId[] = [
   "openai-codex",
   "anthropic",
   "cursor",
   "xai",
   "kimi-for-coding",
-  "opencode-go",
 ];
 
 function formatReset(resetsAt: string | null): string {
@@ -72,7 +72,9 @@ function ProviderMark({ icon }: { readonly icon: Icon | string }) {
 }
 
 export function UsagePlanMeters(props: { readonly limits: UsageProviderPlanLimits }) {
-  const presentation = PLAN_PROVIDER_PRESENTATION[props.limits.provider];
+  const presentation =
+    PLAN_PROVIDER_PRESENTATION[props.limits.provider as DashboardSubscriptionProviderId];
+  if (!presentation) return null;
   const title =
     props.limits.plan === null
       ? presentation.label

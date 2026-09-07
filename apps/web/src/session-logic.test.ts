@@ -30,6 +30,7 @@ describe("provider options", () => {
     const providers = PROVIDER_OPTIONS.map((option) => String(option.value));
     expect(providers).toContain("kimi");
     expect(providers).not.toContain("cursor");
+    expect(providers).not.toContain("opencodeGo");
   });
 });
 

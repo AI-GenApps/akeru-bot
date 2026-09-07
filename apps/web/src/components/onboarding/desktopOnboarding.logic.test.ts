@@ -214,23 +214,11 @@ describe("desktop onboarding", () => {
         availability: "available" as const,
         models: [{ slug: "claude-old" }, { slug: "claude-default", isDefault: true }],
       },
-      {
-        instanceId: "opencodeGo",
-        driver: "opencodeGo",
-        enabled: true,
-        installed: true,
-        availability: "available" as const,
-        models: [{ slug: "gpt-5.6-luna", isDefault: true }],
-      },
     ];
 
     expect(resolveDesktopOnboardingEngine("anthropic", providers)).toEqual({
       provider: "claudeAgent",
       model: "claude-default",
-    });
-    expect(resolveDesktopOnboardingEngine("opencode-go", providers)).toEqual({
-      provider: "opencodeGo",
-      model: "gpt-5.6-luna",
     });
     expect(resolveDesktopOnboardingEngine("xai", providers)).toBeNull();
     expect(
@@ -243,7 +231,6 @@ describe("desktop onboarding", () => {
     ["anthropic", "claudeAgent"],
     ["xai", "grok"],
     ["kimi-for-coding", "kimi"],
-    ["opencode-go", "opencodeGo"],
   ] as const)("restores and resolves the %s subscription", (providerId, driver) => {
     const draft = { ...DEFAULT_DESKTOP_ONBOARDING_DRAFT, providerId };
     const provider = {
@@ -271,9 +258,9 @@ describe("desktop onboarding", () => {
     expect(resolveDesktopOnboardingEngine(providerId, [{ ...provider, models: [] }])).toBeNull();
   });
 
-  it("restores an OpenCode Go onboarding draft", () => {
+  it("rejects a retired OpenCode Go onboarding draft", () => {
     const draft = { ...DEFAULT_DESKTOP_ONBOARDING_DRAFT, providerId: "opencode-go" as const };
 
-    expect(parseDesktopOnboardingDraft(JSON.stringify(draft))).toEqual(draft);
+    expect(parseDesktopOnboardingDraft(JSON.stringify(draft))).toBeNull();
   });
 });

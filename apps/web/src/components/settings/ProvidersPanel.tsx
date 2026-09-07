@@ -123,7 +123,7 @@ export function ProviderLoginCard({
       }
       control={
         <div className="flex flex-wrap items-center gap-1.5">
-          {definition.id !== "opencode-go" && onApiKey ? (
+          {onApiKey ? (
             <Button size="xs" variant="ghost-muted" disabled={busy || disabled} onClick={onApiKey}>
               {providerUsesApiKey(status) ? "Reconnect key" : "API key"}
             </Button>
@@ -144,9 +144,7 @@ export function ProviderLoginCard({
                 disabled={busy || disabled}
                 onClick={onConnect}
               >
-                {providerUsesApiKey(status) && definition.id !== "opencode-go"
-                  ? "Use OAuth"
-                  : "Reconnect"}
+                {providerUsesApiKey(status) ? "Use OAuth" : "Reconnect"}
               </Button>
               <Button
                 size="icon-xs"
@@ -263,7 +261,6 @@ function ActiveLoginPanel({
   readonly completing: boolean;
 }) {
   const { flow } = login;
-  const isApiKey = flow.provider === "opencode-go";
   return (
     <div className="mx-3 mb-3 space-y-3 rounded-xl border bg-muted/30 p-4 sm:mx-4">
       <div className="flex items-center justify-between gap-3">
@@ -275,7 +272,7 @@ function ActiveLoginPanel({
           variant="outline"
           render={<a href={flow.url} target="_blank" rel="noreferrer" />}
         >
-          {isApiKey ? "Open OpenCode" : "Open sign-in"}
+          Open sign-in
           <ExternalLinkIcon className="size-3.5" />
         </Button>
       </div>
@@ -297,12 +294,12 @@ function ActiveLoginPanel({
       {flow.completion === "paste" ? (
         <div className="flex gap-2">
           <Input
-            type={isApiKey ? "password" : "text"}
+            type="text"
             autoComplete="off"
             value={pastedCode}
             onChange={(event) => onPastedCodeChange(event.currentTarget.value)}
-            placeholder={isApiKey ? "Paste the API key" : "Paste the authorization code"}
-            aria-label={isApiKey ? "API key" : "Authorization code"}
+            placeholder="Paste the authorization code"
+            aria-label="Authorization code"
             className="flex-1"
           />
           <Button
@@ -475,10 +472,6 @@ function ProviderConnections({ environmentId }: { readonly environmentId: Enviro
 
   const connect = async (definition: SubscriptionProviderDefinition) => {
     if (environmentId === null) return;
-    if (definition.id === "opencode-go") {
-      openApiKey(definition);
-      return;
-    }
     setError(null);
     setPastedCode("");
     setBusyProvider(definition.id);

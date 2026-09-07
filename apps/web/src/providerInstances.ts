@@ -39,6 +39,15 @@ export const NO_PROVIDER_MODEL_SELECTION: ModelSelection = {
 };
 
 /**
+ * OpenCode Go was retired in favor of the native OpenCode CLI/ACP driver.
+ * Keep the server contracts able to decode historical settings, but do not
+ * surface the retired driver in current client provider catalogs or pickers.
+ */
+export function isRetiredProviderDriverKind(driver: ProviderDriverKind): boolean {
+  return String(driver) === "opencodeGo";
+}
+
+/**
  * UI-facing projection of one configured provider instance. Carries the
  * snapshot verbatim for callers that need server-side fields we don't
  * hoist here, plus the precomputed `instanceId` / `driverKind` /
@@ -195,13 +204,15 @@ function resolveInstanceDisplayName(
 export function deriveProviderInstanceEntries(
   providers: ReadonlyArray<ServerProvider>,
 ): ReadonlyArray<ProviderInstanceEntry> {
-  return providers.map((snapshot) => {
+  const entries: ProviderInstanceEntry[] = [];
+  for (const snapshot of providers) {
+    if (isRetiredProviderDriverKind(snapshot.driver)) continue;
     const instanceId = snapshot.instanceId;
     const driverKind = snapshot.driver;
     const defaultId = defaultInstanceIdForDriver(driverKind);
     const isDefault = instanceId === defaultId;
     const displayName = resolveInstanceDisplayName(snapshot, instanceId, driverKind, isDefault);
-    return {
+    entries.push({
       instanceId,
       driverKind,
       displayName,
@@ -214,8 +225,9 @@ export function deriveProviderInstanceEntries(
       isAvailable: snapshot.availability !== "unavailable",
       snapshot,
       models: snapshot.models,
-    } satisfies ProviderInstanceEntry;
-  });
+    } satisfies ProviderInstanceEntry);
+  }
+  return entries;
 }
 
 /**

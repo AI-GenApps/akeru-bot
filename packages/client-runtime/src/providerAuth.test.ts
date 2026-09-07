@@ -23,7 +23,6 @@ describe("provider API key forms", () => {
       "anthropic",
       "xai",
       "kimi-for-coding",
-      "opencode-go",
     ]);
   });
 

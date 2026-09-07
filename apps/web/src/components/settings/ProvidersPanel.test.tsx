@@ -5,11 +5,11 @@ import { describe, expect, it } from "vite-plus/test";
 import { ProviderApiKeyForm, ProviderLoginCard, SUBSCRIPTION_PROVIDERS } from "./ProvidersPanel";
 
 describe("subscription providers", () => {
-  it("offers Kimi subscription login without Cursor", () => {
+  it("offers current subscription logins without Cursor or retired OpenCode Go", () => {
     const providers = SUBSCRIPTION_PROVIDERS.map((provider) => provider.id);
     expect(providers).toContain("kimi-for-coding");
-    expect(providers).toContain("opencode-go");
     expect(providers).not.toContain("cursor");
+    expect(providers).not.toContain("opencode-go");
   });
 
   it("masks API keys and offers an optional endpoint with save and cancel", () => {

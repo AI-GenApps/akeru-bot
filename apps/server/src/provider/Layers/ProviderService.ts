@@ -382,11 +382,15 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     const currentIds = yield* registry.listInstances();
     const next = new Map<ProviderInstanceId, ProviderAdapterShape<ProviderAdapterError>>();
     for (const id of currentIds) {
-      const adapterOption = yield* registry
+      // Mastra-native providers intentionally do not expose a legacy
+      // ProviderAdapter. Treat that expected absence as a normal routing
+      // state; logging it on every startup polluted Diagnostics with a
+      // warning for Kimi and the retired OpenCode Go provider. Other lookup
+      // failures still surface through the registry's typed error channel.
+      const adapter = yield* registry
         .getByInstance(id)
-        .pipe(Effect.tapError(Effect.logWarning), Effect.option);
-      if (Option.isNone(adapterOption)) continue;
-      const adapter = adapterOption.value;
+        .pipe(Effect.catchTag("ProviderUnsupportedError", () => Effect.succeed(undefined)));
+      if (adapter === undefined) continue;
       next.set(id, adapter);
       if (previous.get(id) !== adapter) {
         yield* Stream.runForEach(adapter.streamEvents, (event) =>

@@ -11,7 +11,6 @@ export const PROVIDER_CONNECTIONS = [
   { id: "anthropic", label: "Claude" },
   { id: "xai", label: "Grok" },
   { id: "kimi-for-coding", label: "Kimi For Coding" },
-  { id: "opencode-go", label: "OpenCode Go" },
 ] as const satisfies ReadonlyArray<{ id: SubscriptionProviderId; label: string }>;
 
 export function providerSupportsBaseUrl(provider: SubscriptionProviderId): boolean {
